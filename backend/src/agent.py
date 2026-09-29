@@ -1,37 +1,34 @@
-import logging
-import sqlite3
 import json
+import logging
 import os
+import sqlite3
 import uuid
-import aiohttp
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated
 
+import aiohttp
 from dotenv import load_dotenv
-
+from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
     JobContext,
     JobProcess,
-    cli,
-    tokenize,
-    room_io,
-    function_tool,
     RunContext,
+    cli,
+    function_tool,
+    room_io,
+    tokenize,
 )
-
 from livekit.plugins import (
-    murf,
-    silero,
-    google,
     deepgram,
+    google,
+    murf,
     noise_cancellation,
+    silero,
 )
-
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-
 
 # ============================================================
 # LOGGING
@@ -92,6 +89,7 @@ init_db()
 # CLEANUP STUCK CALLS
 # ============================================================
 
+
 def cleanup_stuck_calls():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -122,6 +120,7 @@ cleanup_stuck_calls()
 # ============================================================
 # CALL ANALYTICS
 # ============================================================
+
 
 def log_call_start(call_id: str, channel: str):
     conn = sqlite3.connect(DB_PATH)
@@ -158,6 +157,7 @@ def log_call_end(call_id: str, outcome: str, reason: str = ""):
 # SHARED CALL STATE
 # ============================================================
 
+
 class CallState:
     def __init__(self, call_id: str):
         self.call_id = call_id
@@ -171,7 +171,7 @@ class CallState:
 
 SYSTEM_PROMPT = """
 IDENTITY:
-You are a highly capable, friendly, and versatile AI assistant (similar to ChatGPT or Gemini). 
+You are a highly capable, friendly, and versatile AI assistant (similar to ChatGPT or Gemini).
 You are here to help the user with anything they need—whether it's learning a new concept, discussing technology, chatting casually, or solving problems.
 
 ROLE & CAPABILITIES:
@@ -191,8 +191,8 @@ LANGUAGE & TONE:
 # ALL-PURPOSE ASSISTANT AGENT
 # ============================================================
 
-class GeneralAI_Assistant(Agent):
 
+class GeneralAIAssistant(Agent):
     def __init__(self, state: CallState):
         super().__init__(instructions=SYSTEM_PROMPT)
         self.state = state
@@ -210,42 +210,56 @@ class GeneralAI_Assistant(Agent):
     ) -> str:
         subject = (subject or "general").strip().lower()
         category = 19 if "math" in subject else 9
-        api_url = f"https://opentdb.com/api.php?amount=1&category={category}&type=multiple"
-        
+        api_url = (
+            f"https://opentdb.com/api.php?amount=1&category={category}&type=multiple"
+        )
+
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
-                async with session.get(api_url) as response:
-                    if response.status != 200:
-                        raise aiohttp.ClientError(f"HTTP {response.status}")
-                    data = await response.json()
+            timeout = aiohttp.ClientTimeout(total=8)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(api_url) as response,
+            ):
+                if response.status != 200:
+                    raise aiohttp.ClientError(f"HTTP {response.status}")
+                data = await response.json()
 
             item = data.get("results", [])[0]
-            options = item.get("incorrect_answers", []) + [item.get("correct_answer")]
-            
-            return json.dumps({
-                "status": "success",
-                "question": item.get("question"),
-                "correct_answer": item.get("correct_answer"),
-                "options": options,
-            }, ensure_ascii=False)
+            options = [*item.get("incorrect_answers", []), item.get("correct_answer")]
+
+            return json.dumps(
+                {
+                    "status": "success",
+                    "question": item.get("question"),
+                    "correct_answer": item.get("correct_answer"),
+                    "options": options,
+                },
+                ensure_ascii=False,
+            )
 
         except Exception as error:
             logger.warning("QUIZ FETCH FALLBACK USED: %s", error)
-            return json.dumps({
-                "status": "fallback",
-                "question": "What is the capital of Australia?",
-                "correct_answer": "Canberra",
-                "options": ["Sydney", "Melbourne", "Canberra", "Perth"],
-            })
+            return json.dumps(
+                {
+                    "status": "fallback",
+                    "question": "What is the capital of Australia?",
+                    "correct_answer": "Canberra",
+                    "options": ["Sydney", "Melbourne", "Canberra", "Perth"],
+                }
+            )
 
     # ========================================================
     # MATH PROBLEM GENERATOR TOOL
     # ========================================================
-    @function_tool(description="Generate a math practice question. Call only if the user wants to practice math.")
+    @function_tool(
+        description="Generate a math practice question. Call only if the user wants to practice math."
+    )
     async def generate_math_problem(
         self,
         context: RunContext,
-        level: Annotated[str, "Student skill level: beginner, intermediate, or advanced"],
+        level: Annotated[
+            str, "Student skill level: beginner, intermediate, or advanced"
+        ],
     ) -> str:
         level = (level or "beginner").strip().lower()
         if "advanced" in level:
@@ -255,12 +269,21 @@ class GeneralAI_Assistant(Agent):
         else:
             question = "What is 15 multiplied by 6?"
 
-        return json.dumps({"status": "success", "subject": "mathematics", "level": level, "question": question})
+        return json.dumps(
+            {
+                "status": "success",
+                "subject": "mathematics",
+                "level": level,
+                "question": question,
+            }
+        )
 
     # ========================================================
     # MARK EXERCISE COMPLETE TOOL
     # ========================================================
-    @function_tool(description="Mark the current exercise as completed once the user answers correctly.")
+    @function_tool(
+        description="Mark the current exercise as completed once the user answers correctly."
+    )
     async def mark_exercise_complete(self, context: RunContext) -> str:
         self.state.exercise_completed = True
         return "Exercise completion recorded successfully."
@@ -279,22 +302,37 @@ class GeneralAI_Assistant(Agent):
         conn.close()
 
         if row:
-            return json.dumps({
-                "user_id": row[0], "name": row[1], "current_level": row[2], 
-                "topics_covered": row[3], "last_interaction": row[4]
-            })
+            return json.dumps(
+                {
+                    "user_id": row[0],
+                    "name": row[1],
+                    "current_level": row[2],
+                    "topics_covered": row[3],
+                    "last_interaction": row[4],
+                }
+            )
         return json.dumps({"status": "not_found"})
 
     @function_tool(description="Save or update a user's profile.")
     async def save_user_profile(
-        self, context: RunContext, user_id: Annotated[str, "User ID"], name: Annotated[str, "Name"],
-        current_level: Annotated[str, "Level"], topics_covered: Annotated[str, "Topics"]
+        self,
+        context: RunContext,
+        user_id: Annotated[str, "User ID"],
+        name: Annotated[str, "Name"],
+        current_level: Annotated[str, "Level"],
+        topics_covered: Annotated[str, "Topics"],
     ) -> str:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
             "INSERT OR REPLACE INTO students VALUES (?, ?, ?, ?, ?)",
-            (user_id.lower(), name, current_level, topics_covered, datetime.now().isoformat()),
+            (
+                user_id.lower(),
+                name,
+                current_level,
+                topics_covered,
+                datetime.now().isoformat(),
+            ),
         )
         conn.commit()
         conn.close()
@@ -307,12 +345,15 @@ class GeneralAI_Assistant(Agent):
 
 server = AgentServer()
 
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
+
 server.setup_fnc = prewarm
 
-@server.rtc_session(agent_name="general-ai-agent")
+
+@server.rtc_session(agent_name="my-agent")
 async def my_agent(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
     call_id = uuid.uuid4().hex[:8]
@@ -324,14 +365,14 @@ async def my_agent(ctx: JobContext):
             metadata = json.loads(ctx.job.metadata)
             if metadata.get("phone_number"):
                 channel = "sip"
-        except:
-            pass
+        except Exception:
+            logger.warning("Could not parse job metadata")
 
     log_call_start(call_id, channel)
 
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
-        llm=google.LLM(model="gemini-1.5-flash"), # Gemini model for broad capability
+        llm=google.LLM(model="gemini-3.5-flash-lite"),
         tts=murf.TTS(
             voice="Anisha",
             style="Conversation",
@@ -343,7 +384,7 @@ async def my_agent(ctx: JobContext):
         preemptive_generation=True,
     )
 
-    assistant = GeneralAI_Assistant(state=state)
+    assistant = GeneralAIAssistant(state=state)
 
     async def on_shutdown():
         log_call_end(call_id, "completed", "Call ended by user or system.")
@@ -353,8 +394,16 @@ async def my_agent(ctx: JobContext):
     await session.start(
         agent=assistant,
         room=ctx.room,
-        room_input_options=room_io.RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVCTelephony(),
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                # Phone (SIP) calls -> BVCTelephony, browser/app -> BVC
+                noise_cancellation=lambda params: (
+                    noise_cancellation.BVCTelephony()
+                    if params.participant.kind
+                    == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+                    else noise_cancellation.BVC()
+                ),
+            ),
         ),
     )
 
@@ -362,9 +411,10 @@ async def my_agent(ctx: JobContext):
 
     # Open-ended, friendly greeting
     await session.say(
-        "Hi there! I am Neo  your AI assistant. How can I help you today?",
+        "Hi there! I am Neo, your AI assistant. How can I help you today?",
         allow_interruptions=True,
     )
+
 
 if __name__ == "__main__":
     cli.run_app(server)
