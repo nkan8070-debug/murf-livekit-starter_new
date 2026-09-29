@@ -28,10 +28,11 @@ from livekit.plugins import (
     noise_cancellation,
     silero,
 )
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+# NOTE: MultilingualModel import removed on purpose (it used too much RAM on Railway)
 
 # ============================================================
-# LOGGINGjfiefef
+# LOGGING
 # ============================================================
 
 logging.basicConfig(level=logging.INFO)
@@ -353,6 +354,7 @@ def prewarm(proc: JobProcess):
 server.setup_fnc = prewarm
 
 
+# IMPORTANT: this name must match the agent name your frontend sends
 @server.rtc_session(agent_name="my-agent")
 async def my_agent(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
@@ -379,7 +381,8 @@ async def my_agent(ctx: JobContext):
             tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
             text_pacing=True,
         ),
-        turn_detection=MultilingualModel(),
+        # Lightweight: uses Silero VAD only (no big turn-detector model)
+        turn_detection="vad",
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
